@@ -1,0 +1,16 @@
+{
+  "name": "audio-intercom-signaling",
+  "version": "1.0.0",
+  "description": "Tiny WebSocket signaling server for the audio intercom app. Relays WebRTC offer/answer/ICE between two peers sharing a room code. Carries no audio.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

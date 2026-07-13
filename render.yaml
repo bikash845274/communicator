@@ -1,0 +1,16 @@
+# Render Blueprint — deploys the signaling server on Render's free tier.
+# In Render: New ► Blueprint ► connect this repo. Render reads this file.
+# Gives you a public URL like https://audio-intercom-signaling.onrender.com
+# Use it in the app as:  wss://audio-intercom-signaling.onrender.com
+services:
+  - type: web
+    name: audio-intercom-signaling
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
