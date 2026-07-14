@@ -1,3 +1,8 @@
+# Local run/build scripts (may contain TURN credentials — never commit)
+run.sh
+build-apk.sh
+*.local.sh
+
 # Miscellaneous
 *.class
 *.log

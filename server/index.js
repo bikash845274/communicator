@@ -93,6 +93,15 @@ wss.on('connection', (ws) => {
         peers = new Set();
         rooms.set(room, peers);
       }
+      // Drop stale sockets first. When a phone's app is killed or it loses
+      // network, its slot can linger until the heartbeat notices — which made a
+      // reconnecting phone wrongly see "room full". Evict anything not OPEN.
+      for (const p of [...peers]) {
+        if (p.readyState !== p.OPEN) {
+          peers.delete(p);
+          if (p.room === room) p.room = null;
+        }
+      }
       if (peers.size >= MAX_PEERS_PER_ROOM) {
         send(ws, { type: 'error', message: 'room full' });
         return;
@@ -135,7 +144,7 @@ const heartbeat = setInterval(() => {
     ws.isAlive = false;
     ws.ping();
   }
-}, 30000);
+}, 15000);
 
 wss.on('close', () => clearInterval(heartbeat));
 

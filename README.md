@@ -31,7 +31,7 @@ pairs the two phones; the live audio flows peer-to-peer (or via a TURN relay).
 |------|------|
 | `lib/main.dart` | Home screen: enter room code, pick Broadcast or Listen |
 | `lib/signaling.dart` | WebSocket + WebRTC peer-connection logic |
-| `lib/broadcast_page.dart` | Captures mic, shows live indicator, mute/stop |
+| `lib/broadcast_page.dart` | Captures mic, auto-live indicator, pauses during calls |
 | `lib/listen_page.dart` | Receives + plays remote audio, shows status |
 | `lib/config.dart` | Signaling URL + STUN/TURN servers (**edit this**) |
 | `server/index.js` | Node WebSocket signaling server |

@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import 'session.dart';
 import 'signaling.dart';
 
-/// The phone that shares its microphone. Shows a clear, always-visible
-/// "live mic" indicator so broadcasting is never covert.
+/// The phone that shares its microphone. The session lives in [IntercomSession],
+/// so pressing back / locking the phone doesn't stop it — it keeps running in the
+/// background with a persistent notification. Stop is via that notification.
 class BroadcastPage extends StatefulWidget {
   const BroadcastPage({super.key, required this.room});
 
@@ -15,97 +18,96 @@ class BroadcastPage extends StatefulWidget {
 }
 
 class _BroadcastPageState extends State<BroadcastPage> {
-  Signaling? _signaling;
-  CallState _state = CallState.idle;
-  String? _detail;
-  bool _muted = false;
-  bool _permissionDenied = false;
+  final _session = IntercomSession.instance;
+  bool _wasActive = false;
 
   @override
   void initState() {
     super.initState();
-    _start();
+    _session.state.addListener(_onState);
+    _ensureStarted();
   }
 
-  Future<void> _start() async {
-    final status = await Permission.microphone.request();
-    if (!status.isGranted) {
-      setState(() => _permissionDenied = true);
+  Future<void> _ensureStarted() async {
+    if (_session.isActive &&
+        _session.room == widget.room &&
+        _session.isBroadcaster) {
       return;
     }
-    final signaling = Signaling(
-      room: widget.room,
-      isBroadcaster: true,
-      onState: (s, d) {
-        if (mounted) {
-          setState(() {
-            _state = s;
-            _detail = d;
-          });
-        }
-      },
-    );
-    _signaling = signaling;
-    await signaling.connect();
+    await _session.start(room: widget.room, isBroadcaster: true);
   }
 
-  void _toggleMute() {
-    final next = !_muted;
-    _signaling?.setMuted(next);
-    setState(() => _muted = next);
+  void _onState() {
+    final s = _session.state.value;
+    if (s != CallState.idle) _wasActive = true;
+    // Session ended (e.g. "Stop" from the notification) — return home.
+    if (_wasActive && s == CallState.idle && mounted) {
+      Navigator.of(context).popUntil((r) => r.isFirst);
+    }
   }
 
   @override
   void dispose() {
-    _signaling?.close();
-    super.dispose();
+    _session.state.removeListener(_onState);
+    super.dispose(); // deliberately does NOT stop the session
   }
 
   @override
   Widget build(BuildContext context) {
-    final isLive = _state == CallState.live;
-    return Scaffold(
-      appBar: AppBar(title: Text('Broadcasting · ${widget.room}')),
-      body: Center(
-        child: _permissionDenied
-            ? _PermissionDenied(onOpenSettings: openAppSettings)
-            : Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(
-                    isLive ? Icons.mic : Icons.mic_none,
-                    size: 120,
-                    color: isLive ? Colors.red : Colors.grey,
-                  ),
-                  const SizedBox(height: 24),
-                  Text(
-                    isLive
-                        ? (_muted ? 'MIC MUTED' : '🔴 LIVE — mic is on')
-                        : (_detail ?? 'Starting…'),
-                    style: Theme.of(context).textTheme.titleLarge,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Anyone with code "${widget.room}" can hear this phone.',
-                    style: Theme.of(context).textTheme.bodySmall,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 40),
-                  FilledButton.tonalIcon(
-                    onPressed: isLive ? _toggleMute : null,
-                    icon: Icon(_muted ? Icons.mic_off : Icons.mic),
-                    label: Text(_muted ? 'Unmute' : 'Mute'),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.stop),
-                    label: const Text('Stop broadcasting'),
-                  ),
-                ],
-              ),
+    return PopScope(
+      canPop: false,
+      // Back keeps broadcasting alive — just minimize the app.
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) FlutterForegroundTask.minimizeApp();
+      },
+      child: Scaffold(
+        appBar: AppBar(title: Text('Broadcasting · ${widget.room}')),
+        body: Center(
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _session.micDenied,
+            builder: (context, denied, _) {
+              if (denied) {
+                return _PermissionDenied(onOpenSettings: openAppSettings);
+              }
+              return ValueListenableBuilder<CallState>(
+                valueListenable: _session.state,
+                builder: (context, s, _) => _body(context, s),
+              );
+            },
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _body(BuildContext context, CallState s) {
+    final isLive = s == CallState.live;
+    final isPaused = s == CallState.paused;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(
+          isLive ? Icons.mic : (isPaused ? Icons.pause_circle : Icons.mic_none),
+          size: 120,
+          color: isLive ? Colors.red : (isPaused ? Colors.orange : Colors.grey),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          isLive
+              ? '🔴 LIVE — mic is on'
+              : (isPaused
+                  ? 'Paused — phone is on a call'
+                  : (_session.detail.value ?? 'Starting…')),
+          style: Theme.of(context).textTheme.titleLarge,
+          textAlign: TextAlign.center,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'You are broadcasting.',
+          style: Theme.of(context).textTheme.bodySmall,
+          textAlign: TextAlign.center,
+        ),
+      ],
     );
   }
 }

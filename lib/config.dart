@@ -15,6 +15,8 @@
 // - TURN_*: from your free Metered account (or any TURN provider). REQUIRED for
 //     two phones on different networks; without it, cross-network calls fail.
 //     Not needed when both phones are on the same WiFi (STUN alone works).
+//     TURN_URL may be a single URL or a comma-separated list (multiple
+//     ports/transports improve reliability on restrictive networks).
 
 class AppConfig {
   static const String signalingUrl = String.fromEnvironment(
@@ -40,8 +42,13 @@ class AppConfig {
     // TURN relay — added only when credentials are provided. Required for
     // phones on different networks (different cities / cellular data).
     if (_turnUrl.isNotEmpty) {
+      final urls = _turnUrl
+          .split(',')
+          .map((u) => u.trim())
+          .where((u) => u.isNotEmpty)
+          .toList();
       servers.add({
-        'urls': [_turnUrl],
+        'urls': urls,
         'username': _turnUser,
         'credential': _turnPass,
       });

@@ -1,18 +1,63 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import 'broadcast_page.dart';
 import 'listen_page.dart';
+import 'session.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Required so the main isolate can receive data (e.g. the "Stop" button)
+  // from the foreground-service isolate.
+  FlutterForegroundTask.initCommunicationPort();
+  IntercomSession.initForegroundTask();
   runApp(const IntercomApp());
 }
 
-class IntercomApp extends StatelessWidget {
+class IntercomApp extends StatefulWidget {
   const IntercomApp({super.key});
+
+  @override
+  State<IntercomApp> createState() => _IntercomAppState();
+}
+
+class _IntercomAppState extends State<IntercomApp> {
+  final _navKey = GlobalKey<NavigatorState>();
+
+  @override
+  void initState() {
+    super.initState();
+    FlutterForegroundTask.addTaskDataCallback(_onTaskData);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoResume());
+  }
+
+  @override
+  void dispose() {
+    FlutterForegroundTask.removeTaskDataCallback(_onTaskData);
+    super.dispose();
+  }
+
+  // "Stop" pressed in the persistent notification.
+  void _onTaskData(Object data) {
+    if (data == 'stop') IntercomSession.instance.stop();
+  }
+
+  // On launch (or reboot-triggered launch), resume the last session.
+  Future<void> _maybeAutoResume() async {
+    final saved = await IntercomSession.savedSession();
+    if (saved == null) return;
+    _navKey.currentState?.push(MaterialPageRoute(
+      builder: (_) => saved.isBroadcaster
+          ? BroadcastPage(room: saved.room)
+          : ListenPage(room: saved.room),
+    ));
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: _navKey,
       title: 'Audio Intercom',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
@@ -32,6 +77,13 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final _roomController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Ask for the microphone once, up front. If already decided, no dialog.
+    Permission.microphone.request();
+  }
 
   String get _room => _roomController.text.trim().toUpperCase();
 
@@ -100,8 +152,8 @@ class _HomePageState extends State<HomePage> {
             ),
             const Spacer(),
             Text(
-              'Use only on devices you own or with consent. The broadcasting '
-              'phone always shows a visible "live mic" indicator.',
+              'Runs in the background with a notification until you stop it. '
+              'The broadcasting phone always shows a visible "live mic" indicator.',
               style: Theme.of(context).textTheme.bodySmall,
               textAlign: TextAlign.center,
             ),

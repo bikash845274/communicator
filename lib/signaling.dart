@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:audio_session/audio_session.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -11,6 +12,7 @@ enum CallState {
   idle,
   connecting, // websocket open, waiting for / negotiating with the peer
   live, // media flowing
+  paused, // mic temporarily released because the phone is on a call
   reconnecting,
   failed,
 }
@@ -31,10 +33,14 @@ class Signaling {
   WebSocketChannel? _ws;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
+  RTCRtpSender? _audioSender;
+
+  AudioSession? _session;
+  StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
+  bool _interrupted = false;
 
   bool _peerPresent = false;
   bool _closed = false;
-  bool _muted = false;
 
   CallState _state = CallState.idle;
   void _setState(CallState s, [String? detail]) {
@@ -90,7 +96,7 @@ class Signaling {
     _pc!.onConnectionState = (s) {
       switch (s) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
-          _setState(CallState.live, 'Live');
+          if (!_interrupted) _setState(CallState.live, 'Live');
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
           _setState(CallState.reconnecting, 'Reconnecting…');
@@ -105,14 +111,17 @@ class Signaling {
     };
 
     if (isBroadcaster) {
-      // Capture the microphone and add the audio track to send.
+      // Prepare the audio session first so we receive interruption events when
+      // a call (cellular or VoIP) takes over the microphone.
+      await _setupAudioSession();
+      // Capture the microphone and add the audio track to send. Keep the sender
+      // so we can swap in a fresh track after a call ends.
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
         'video': false,
       });
-      for (final track in _localStream!.getAudioTracks()) {
-        await _pc!.addTrack(track, _localStream!);
-      }
+      _audioSender =
+          await _pc!.addTrack(_localStream!.getAudioTracks().first, _localStream!);
     } else {
       // Listener only receives; mark the transceiver as recv-only.
       await _pc!.addTransceiver(
@@ -214,15 +223,54 @@ class Signaling {
     });
   }
 
-  /// Mute / unmute the outgoing microphone (broadcaster only).
-  void setMuted(bool muted) {
-    _muted = muted;
-    for (final track in _localStream?.getAudioTracks() ?? <MediaStreamTrack>[]) {
-      track.enabled = !muted;
+  /// Configure the audio session and watch for interruptions. When a call
+  /// (cellular or a VoIP app like WhatsApp/Viber) grabs the mic, iOS/Android
+  /// fire a "begin" interruption; when it ends we re-acquire the mic and resume.
+  Future<void> _setupAudioSession() async {
+    _session = await AudioSession.instance;
+    await _session!.configure(const AudioSessionConfiguration.speech());
+    await _session!.setActive(true);
+
+    _interruptionSub = _session!.interruptionEventStream.listen((event) async {
+      if (_closed) return;
+      if (event.begin) {
+        // A call took over the microphone — release it and pause cleanly.
+        _interrupted = true;
+        _setState(CallState.paused, 'Paused — phone is on a call');
+      } else {
+        // Call ended — re-acquire the mic and resume streaming.
+        _interrupted = false;
+        await _resumeMic();
+      }
+    });
+  }
+
+  /// Re-acquire a fresh microphone track after a call and swap it into the
+  /// existing sender (no renegotiation needed for a same-kind track).
+  Future<void> _resumeMic() async {
+    if (_closed || !isBroadcaster || _pc == null) return;
+    try {
+      await _session?.setActive(true);
+      final newStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': false,
+      });
+      final newTrack = newStream.getAudioTracks().first;
+      await _audioSender?.replaceTrack(newTrack);
+
+      final old = _localStream;
+      _localStream = newStream;
+      for (final t in old?.getAudioTracks() ?? <MediaStreamTrack>[]) {
+        await t.stop();
+      }
+      await old?.dispose();
+
+      _setState(CallState.live, 'Live');
+    } catch (_) {
+      _setState(CallState.reconnecting, 'Resuming after call…');
     }
   }
 
-  bool get isMuted => _muted;
   CallState get state => _state;
 
   void _sendSignal(Map<String, dynamic> msg) {
@@ -232,12 +280,14 @@ class Signaling {
   Future<void> close() async {
     _closed = true;
     try {
+      await _interruptionSub?.cancel();
       for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
         await track.stop();
       }
       await _localStream?.dispose();
       await _pc?.close();
       await _ws?.sink.close();
+      await _session?.setActive(false);
     } catch (_) {
       // Best-effort teardown.
     }
