@@ -93,13 +93,22 @@ wss.on('connection', (ws) => {
         peers = new Set();
         rooms.set(room, peers);
       }
-      // Drop stale sockets first. When a phone's app is killed or it loses
-      // network, its slot can linger until the heartbeat notices — which made a
-      // reconnecting phone wrongly see "room full". Evict anything not OPEN.
+      const clientId = msg.clientId ? String(msg.clientId) : null;
+      ws.clientId = clientId;
+      // Free up slots before counting:
+      //  - stale sockets (app killed / network lost, not yet noticed), and
+      //  - any PREVIOUS connection from this same phone (a reconnect after a
+      //    network switch or app restart) — otherwise the phone's own ghost
+      //    made it wrongly see "room full".
       for (const p of [...peers]) {
-        if (p.readyState !== p.OPEN) {
+        const isStale = p.readyState !== p.OPEN;
+        const isSameClient = clientId && p.clientId === clientId;
+        if (isStale || isSameClient) {
           peers.delete(p);
           if (p.room === room) p.room = null;
+          if (!isStale) {
+            try { p.close(); } catch { /* ignore */ }
+          }
         }
       }
       if (peers.size >= MAX_PEERS_PER_ROOM) {

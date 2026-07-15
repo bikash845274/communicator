@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8,6 +10,7 @@ import 'signaling.dart';
 const _kRoom = 'last_room';
 const _kBroadcaster = 'is_broadcaster';
 const _kAutoStart = 'auto_start';
+const _kClientId = 'client_id';
 
 /// A saved session to auto-resume.
 typedef SavedSession = ({String room, bool isBroadcaster});
@@ -76,6 +79,7 @@ class IntercomSession {
     await prefs.setString(_kRoom, room);
     await prefs.setBool(_kBroadcaster, isBroadcaster);
     await prefs.setBool(_kAutoStart, true);
+    final clientId = await _clientId(prefs);
 
     await _ensureNotificationPermission();
     await _startOrUpdateService();
@@ -83,6 +87,7 @@ class IntercomSession {
     final signaling = Signaling(
       room: room,
       isBroadcaster: isBroadcaster,
+      clientId: clientId,
       onState: (s, d) {
         detail.value = d;
         state.value = s;
@@ -106,6 +111,18 @@ class IntercomSession {
     _signaling = null;
     state.value = CallState.idle;
     detail.value = null;
+  }
+
+  /// A stable per-install id so the server can tell a reconnecting phone apart
+  /// from a genuinely different one (prevents a false "room full" on reconnect).
+  Future<String> _clientId(SharedPreferences prefs) async {
+    var id = prefs.getString(_kClientId);
+    if (id == null || id.isEmpty) {
+      id = '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+          '-${Random().nextInt(0xFFFFFFF).toRadixString(36)}';
+      await prefs.setString(_kClientId, id);
+    }
+    return id;
   }
 
   Future<void> _ensureNotificationPermission() async {

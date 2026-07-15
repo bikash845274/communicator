@@ -24,10 +24,16 @@ typedef StateCallback = void Function(CallState state, String? detail);
 /// One instance per session. Set [isBroadcaster] to true on the phone that
 /// shares its microphone, false on the phone that listens.
 class Signaling {
-  Signaling({required this.room, required this.isBroadcaster, this.onState});
+  Signaling({
+    required this.room,
+    required this.isBroadcaster,
+    required this.clientId,
+    this.onState,
+  });
 
   final String room;
   final bool isBroadcaster;
+  final String clientId;
   final StateCallback? onState;
 
   WebSocketChannel? _ws;
@@ -71,7 +77,7 @@ class Signaling {
     );
 
     await _createPeerConnection();
-    _sendSignal({'type': 'join', 'room': room});
+    _sendSignal({'type': 'join', 'room': room, 'clientId': clientId});
     _setState(CallState.connecting, 'Waiting for the other phone…');
   }
 
@@ -228,11 +234,29 @@ class Signaling {
   /// fire a "begin" interruption; when it ends we re-acquire the mic and resume.
   Future<void> _setupAudioSession() async {
     _session = await AudioSession.instance;
-    await _session!.configure(const AudioSessionConfiguration.speech());
+    // Voice-communication config. Crucially NOT the .speech() preset, which uses
+    // the playback category and androidWillPauseWhenDucked:true — that turned
+    // every transient "duck" (e.g. a notification sound) into a false pause.
+    await _session!.configure(AudioSessionConfiguration(
+      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+      avAudioSessionCategoryOptions:
+          AVAudioSessionCategoryOptions.defaultToSpeaker |
+              AVAudioSessionCategoryOptions.allowBluetooth,
+      avAudioSessionMode: AVAudioSessionMode.voiceChat,
+      androidAudioAttributes: const AndroidAudioAttributes(
+        contentType: AndroidAudioContentType.speech,
+        usage: AndroidAudioUsage.voiceCommunication,
+      ),
+      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+      androidWillPauseWhenDucked: false,
+    ));
     await _session!.setActive(true);
 
     _interruptionSub = _session!.interruptionEventStream.listen((event) async {
       if (_closed) return;
+      // Ignore transient ducking (notification sounds, brief beeps) — these do
+      // not take the mic, so broadcasting should keep running.
+      if (event.type == AudioInterruptionType.duck) return;
       if (event.begin) {
         // A call took over the microphone — release it and pause cleanly.
         _interrupted = true;

@@ -1,6 +1,7 @@
 # Local run/build scripts (may contain TURN credentials — never commit)
 run.sh
 build-apk.sh
+install-ios.sh
 *.local.sh
 
 # Miscellaneous
