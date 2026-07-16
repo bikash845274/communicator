@@ -37,6 +37,7 @@ class Signaling {
   final StateCallback? onState;
 
   WebSocketChannel? _ws;
+  StreamSubscription? _wsSub;
   RTCPeerConnection? _pc;
   MediaStream? _localStream;
   RTCRtpSender? _audioSender;
@@ -48,37 +49,86 @@ class Signaling {
   bool _peerPresent = false;
   bool _closed = false;
 
+  // Signaling-server reconnect state.
+  Timer? _reconnectTimer;
+  int _retryAttempt = 0;
+  bool _pcConnected = false; // is the WebRTC media connection currently up?
+
   CallState _state = CallState.idle;
   void _setState(CallState s, [String? detail]) {
     _state = s;
     onState?.call(s, detail);
   }
 
-  /// Open the websocket, join the room, and prepare the peer connection.
+  /// Prepare the peer connection (once) and connect to the signaling server,
+  /// retrying automatically until it succeeds.
   Future<void> connect() async {
     _closed = false;
-    _setState(CallState.connecting, 'Connecting to server…');
+    await _createPeerConnection();
+    await _openWebSocket();
+  }
 
+  /// (Re)open the signaling WebSocket. On failure or drop it schedules another
+  /// attempt with backoff, so a sleeping/cold-starting server or a network blip
+  /// self-heals instead of leaving the app stuck on "Connecting…".
+  Future<void> _openWebSocket() async {
+    if (_closed) return;
+    _reconnectTimer?.cancel();
+    _setState(
+      _pcConnected ? CallState.reconnecting : CallState.connecting,
+      'Connecting to server…',
+    );
+
+    final channel = WebSocketChannel.connect(Uri.parse(AppConfig.signalingUrl));
     try {
-      _ws = WebSocketChannel.connect(Uri.parse(AppConfig.signalingUrl));
-      // Ensure the socket is actually open before we start sending.
-      await _ws!.ready;
-    } catch (e) {
-      _setState(CallState.failed, 'Cannot reach signaling server: $e');
+      // A cold-starting free server can take ~30s to wake, so be patient.
+      await channel.ready.timeout(const Duration(seconds: 40));
+    } catch (_) {
+      await channel.sink.close();
+      _scheduleReconnect();
+      return;
+    }
+    if (_closed) {
+      await channel.sink.close();
       return;
     }
 
-    _ws!.stream.listen(
+    _ws = channel;
+    _retryAttempt = 0;
+    _wsSub = channel.stream.listen(
       _onSignal,
-      onError: (e) => _setState(CallState.reconnecting, 'Connection error: $e'),
-      onDone: () {
-        if (!_closed) _setState(CallState.reconnecting, 'Disconnected');
-      },
+      onError: (_) => _handleWsDrop(),
+      onDone: _handleWsDrop,
+      cancelOnError: true,
     );
 
-    await _createPeerConnection();
+    // (Re)join the room. If a partner is already present, negotiation resumes
+    // via the normal joined / peer-joined handling.
     _sendSignal({'type': 'join', 'room': room, 'clientId': clientId});
-    _setState(CallState.connecting, 'Waiting for the other phone…');
+    if (!_pcConnected) {
+      _setState(CallState.connecting, 'Waiting for the other phone…');
+    }
+  }
+
+  void _handleWsDrop() {
+    if (_closed) return;
+    _wsSub?.cancel();
+    _wsSub = null;
+    _ws = null;
+    _scheduleReconnect();
+  }
+
+  void _scheduleReconnect() {
+    if (_closed) return;
+    _reconnectTimer?.cancel();
+    _retryAttempt++;
+    // Backoff 2s, 4s, 6s … capped at 20s.
+    final delay = Duration(seconds: (_retryAttempt * 2).clamp(2, 20));
+    _setState(
+      _pcConnected ? CallState.reconnecting : CallState.connecting,
+      'Reconnecting to server…',
+    );
+    _reconnectTimer = Timer(delay, _openWebSocket);
   }
 
   Future<void> _createPeerConnection() async {
@@ -102,12 +152,15 @@ class Signaling {
     _pc!.onConnectionState = (s) {
       switch (s) {
         case RTCPeerConnectionState.RTCPeerConnectionStateConnected:
+          _pcConnected = true;
           if (!_interrupted) _setState(CallState.live, 'Live');
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateDisconnected:
+          _pcConnected = false;
           _setState(CallState.reconnecting, 'Reconnecting…');
           break;
         case RTCPeerConnectionState.RTCPeerConnectionStateFailed:
+          _pcConnected = false;
           _setState(CallState.failed, 'Connection failed');
           _restartIce();
           break;
@@ -304,6 +357,8 @@ class Signaling {
   Future<void> close() async {
     _closed = true;
     try {
+      _reconnectTimer?.cancel();
+      await _wsSub?.cancel();
       await _interruptionSub?.cancel();
       for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
         await track.stop();
