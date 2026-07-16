@@ -45,6 +45,7 @@ class Signaling {
   AudioSession? _session;
   StreamSubscription<AudioInterruptionEvent>? _interruptionSub;
   bool _interrupted = false;
+  Timer? _pauseTimer;
 
   bool _peerPresent = false;
   bool _closed = false;
@@ -311,13 +312,24 @@ class Signaling {
       // not take the mic, so broadcasting should keep running.
       if (event.type == AudioInterruptionType.duck) return;
       if (event.begin) {
-        // A call took over the microphone — release it and pause cleanly.
-        _interrupted = true;
-        _setState(CallState.paused, 'Paused — phone is on a call');
+        // Debounce: only treat it as a real pause if the interruption actually
+        // lasts. Brief audio-focus blips at startup would otherwise flash a
+        // false "phone is on a call".
+        _pauseTimer?.cancel();
+        _pauseTimer = Timer(const Duration(milliseconds: 1500), () {
+          if (_closed) return;
+          _interrupted = true;
+          _setState(CallState.paused, 'Paused — phone is on a call');
+        });
       } else {
-        // Call ended — re-acquire the mic and resume streaming.
-        _interrupted = false;
-        await _resumeMic();
+        // Interruption ended.
+        _pauseTimer?.cancel();
+        _pauseTimer = null;
+        if (_interrupted) {
+          // We had genuinely paused (a real call) — re-acquire the mic.
+          _interrupted = false;
+          await _resumeMic();
+        }
       }
     });
   }
@@ -358,6 +370,7 @@ class Signaling {
     _closed = true;
     try {
       _reconnectTimer?.cancel();
+      _pauseTimer?.cancel();
       await _wsSub?.cancel();
       await _interruptionSub?.cancel();
       for (final track in _localStream?.getTracks() ?? <MediaStreamTrack>[]) {
