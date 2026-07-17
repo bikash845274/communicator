@@ -30,7 +30,8 @@ pairs the two phones; the live audio flows peer-to-peer (or via a TURN relay).
 | Path | What |
 |------|------|
 | `lib/main.dart` | Home screen: enter room code, pick Broadcast or Listen |
-| `lib/signaling.dart` | WebSocket + WebRTC peer-connection logic |
+| `lib/session.dart` | Keeps the session alive (foreground service, notification, auto-resume) |
+| `lib/signaling.dart` | WebSocket + WebRTC logic, auto-reconnect, call handling |
 | `lib/broadcast_page.dart` | Captures mic, auto-live indicator, pauses during calls |
 | `lib/listen_page.dart` | Receives + plays remote audio, shows status |
 | `lib/config.dart` | Signaling URL + STUN/TURN servers (**edit this**) |
@@ -81,11 +82,57 @@ room code**. Listener should hear the broadcaster within a second or two.
 4. **Resilience:** toggle airplane mode briefly; the connection auto-recovers
    (ICE restart).
 
-## Known follow-ups (not yet implemented)
+## Keeping it running reliably (phone settings)
 
-- **Android background streaming:** permissions are declared, but a foreground
-  service is needed to keep the mic alive when the app is backgrounded. Add the
-  [`flutter_foreground_task`](https://pub.dev/packages/flutter_foreground_task)
-  plugin and start a `microphone`-type service from `BroadcastPage`.
+The app runs in the background via a foreground service (persistent notification)
+and auto-reconnects to the server. But aggressive OEM battery managers —
+especially **MIUI / HyperOS (Xiaomi/Redmi/POCO)** — will still kill it unless you
+allow it. Do these on the **broadcasting** phone (the one you leave running):
+
+1. **Autostart → ON**
+   Settings → Apps → Manage apps → *audio_intercom* → **Autostart**.
+2. **Battery → No restrictions**
+   Settings → Apps → Manage apps → *audio_intercom* → **Battery saver** → **No restrictions**.
+3. **Lock it in Recents** so "Clear all" won't kill it
+   Recents (□) → long-press the app card (or swipe down on it) → **Lock** 🔒.
+4. **Exit with Home / Back / lock screen — never swipe it out of Recents.**
+   Swiping from Recents kills the app (and the broadcast); backgrounding keeps it running.
+
+**Optional — hide the notification banner** (Android requires the banner for the
+foreground service, but you can turn it off in the OS): Settings → Apps →
+*audio_intercom* → **Notifications → OFF**. Broadcasting keeps working; the green
+OS mic indicator stays (it is not app-controllable).
+
+**iPhone:** no special settings — iOS keeps background audio alive via the
+background-audio mode; trust the developer profile + allow mic on first launch.
+(iOS cannot auto-start after a reboot — reopen the app once.)
+
+### Keep the free server awake
+
+Render's free tier sleeps after ~15 min idle, which makes the listener wait
+(or, on older builds, hang) on a cold start. Point a free uptime pinger at the
+health endpoint so it never sleeps:
+
+- **UptimeRobot** / **cron-job.org** → HTTP(s) monitor, 5-min interval, URL:
+  `https://<your-app>.onrender.com/health`
+
+While a broadcaster is actively connected the server stays warm on its own; the
+pinger covers the gaps when nothing is connected.
+
+## Deployment & install helpers
+
+See `DEPLOY.md` for the full free deploy runbook (Render + Metered TURN). Local,
+git-ignored helper scripts (they contain TURN credentials — never committed):
+
+- `run.sh` — run on a tethered device with config baked in
+- `build-apk.sh` — build a shareable release APK (Android installs by tapping it)
+- `install-ios.sh` — build + install onto a connected iPhone (iOS has no
+  tap-to-install file; the phone must be tethered, or use TestFlight)
+
+## Known follow-ups (optional)
+
 - **TURN server:** must be provisioned for cross-network use (see above).
 - **Pairing UX:** room codes are typed; a QR-code share would be friendlier.
+- **Survive "Clear all":** to keep broadcasting after the app is force-swiped from
+  Recents, the audio engine would need to run inside the foreground-service
+  isolate (larger rewrite). Today, use the Recents-lock + battery settings above.
