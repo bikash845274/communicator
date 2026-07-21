@@ -41,9 +41,6 @@ dependencies:
   web_socket_channel: ^3.0.1
   # Runtime microphone permission.
   permission_handler: ^11.3.1
-  # Detects audio interruptions (cellular calls AND VoIP apps like WhatsApp/
-  # Viber grabbing the mic) so we can release + resume cleanly.
-  audio_session: ^0.1.21
   # Keeps the app alive in the background (foreground service + persistent
   # notification, microphone type) and can auto-start after reboot (Android).
   flutter_foreground_task: ^8.17.0
