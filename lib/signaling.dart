@@ -167,8 +167,22 @@ class Signaling {
       // Capture the microphone and add the audio track to send. flutter_webrtc
       // manages the platform audio session itself; we don't add a second audio
       // manager on top (that produced false "on a call" pauses on some phones).
+      // Capture the mic with the voice-call DSP turned OFF. The defaults
+      // (noise suppression, auto gain, echo cancel, voice band-pass) are tuned
+      // for a person talking into the phone and make ambient/room audio sound
+      // thin and gated — bad for a monitor. Disabling them gives fuller audio.
       _localStream = await navigator.mediaDevices.getUserMedia({
-        'audio': true,
+        'audio': {
+          'echoCancellation': false,
+          'noiseSuppression': false,
+          'autoGainControl': false,
+          // Android (goog-prefixed) equivalents:
+          'googEchoCancellation': false,
+          'googNoiseSuppression': false,
+          'googAutoGainControl': false,
+          'googHighpassFilter': false,
+          'googTypingNoiseDetection': false,
+        },
         'video': false,
       });
       await _pc!.addTrack(_localStream!.getAudioTracks().first, _localStream!);
@@ -242,11 +256,50 @@ class Signaling {
   Future<void> _makeOffer() async {
     if (_pc == null) return;
     final offer = await _pc!.createOffer();
-    await _pc!.setLocalDescription(offer);
+    final tuned = RTCSessionDescription(
+      _boostOpus(offer.sdp ?? ''),
+      offer.type,
+    );
+    await _pc!.setLocalDescription(tuned);
     _sendSignal({
       'type': 'offer',
-      'payload': {'sdp': offer.sdp, 'type': offer.type},
+      'payload': {'sdp': tuned.sdp, 'type': tuned.type},
     });
+  }
+
+  /// Raise Opus audio quality in the SDP: high bitrate, full 48 kHz playback,
+  /// and in-band forward error correction (better resilience to packet loss).
+  /// Defaults are low-bitrate narrowband voice, which sounds poor for a monitor.
+  String _boostOpus(String sdp) {
+    final lines = sdp.split(RegExp(r'\r\n|\n'));
+    String? pt;
+    for (final l in lines) {
+      final m = RegExp(r'^a=rtpmap:(\d+) opus/48000').firstMatch(l);
+      if (m != null) {
+        pt = m.group(1);
+        break;
+      }
+    }
+    if (pt == null) return sdp;
+
+    const params =
+        'maxaveragebitrate=128000;maxplaybackrate=48000;useinbandfec=1;stereo=1;sprop-stereo=1';
+    final out = <String>[];
+    var patched = false;
+    for (final l in lines) {
+      if (l.startsWith('a=fmtp:$pt ')) {
+        out.add(l.contains('maxaveragebitrate') ? l : '$l;$params');
+        patched = true;
+      } else {
+        out.add(l);
+        // No existing fmtp line for opus — add one right after its rtpmap.
+        if (!patched && l.startsWith('a=rtpmap:$pt opus/48000')) {
+          out.add('a=fmtp:$pt $params');
+          patched = true;
+        }
+      }
+    }
+    return out.join('\r\n');
   }
 
   Future<void> _handleOffer(Map<String, dynamic> payload) async {
@@ -255,10 +308,13 @@ class Signaling {
       RTCSessionDescription(payload['sdp'] as String, payload['type'] as String),
     );
     final answer = await _pc!.createAnswer();
-    await _pc!.setLocalDescription(answer);
+    // The receiver's fmtp governs what the sender transmits, so the listener's
+    // answer is what actually raises the audio quality it gets.
+    final tuned = RTCSessionDescription(_boostOpus(answer.sdp ?? ''), answer.type);
+    await _pc!.setLocalDescription(tuned);
     _sendSignal({
       'type': 'answer',
-      'payload': {'sdp': answer.sdp, 'type': answer.type},
+      'payload': {'sdp': tuned.sdp, 'type': tuned.type},
     });
   }
 
@@ -266,10 +322,11 @@ class Signaling {
     if (_closed || !isBroadcaster || _pc == null) return;
     _setState(CallState.reconnecting, 'Recovering connection…');
     final offer = await _pc!.createOffer({'iceRestart': true});
-    await _pc!.setLocalDescription(offer);
+    final tuned = RTCSessionDescription(_boostOpus(offer.sdp ?? ''), offer.type);
+    await _pc!.setLocalDescription(tuned);
     _sendSignal({
       'type': 'offer',
-      'payload': {'sdp': offer.sdp, 'type': offer.type},
+      'payload': {'sdp': tuned.sdp, 'type': tuned.type},
     });
   }
 
