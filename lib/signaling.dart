@@ -47,6 +47,7 @@ class Signaling {
   Timer? _reconnectTimer;
   int _retryAttempt = 0;
   bool _pcConnected = false; // is the WebRTC media connection currently up?
+  String? _lastError; // last connect failure reason, shown to the user
 
   CallState _state = CallState.idle;
   void _setState(CallState s, [String? detail]) {
@@ -77,8 +78,12 @@ class Signaling {
     try {
       // A cold-starting free server can take ~30s to wake, so be patient.
       await channel.ready.timeout(const Duration(seconds: 40));
-    } catch (_) {
-      await channel.sink.close();
+      _lastError = null;
+    } catch (e) {
+      _lastError = _shortError(e);
+      try {
+        await channel.sink.close();
+      } catch (_) {}
       _scheduleReconnect();
       return;
     }
@@ -104,6 +109,20 @@ class Signaling {
     }
   }
 
+  /// Turn a connection exception into a short, human-readable reason.
+  String _shortError(Object e) {
+    final s = e.toString().toLowerCase();
+    if (s.contains('failed host lookup') || s.contains('nodename')) {
+      return 'no internet / DNS';
+    }
+    if (s.contains('timeout') || s.contains('timed out')) return 'timed out';
+    if (s.contains('refused')) return 'refused';
+    if (s.contains('handshake') || s.contains('certificate')) return 'TLS error';
+    if (s.contains('network is unreachable')) return 'network unreachable';
+    final raw = e.toString();
+    return raw.length > 48 ? raw.substring(0, 48) : raw;
+  }
+
   void _handleWsDrop() {
     if (_closed) return;
     _wsSub?.cancel();
@@ -118,9 +137,10 @@ class Signaling {
     _retryAttempt++;
     // Backoff 2s, 4s, 6s … capped at 20s.
     final delay = Duration(seconds: (_retryAttempt * 2).clamp(2, 20));
+    final why = _lastError == null ? '' : ' ($_lastError)';
     _setState(
       _pcConnected ? CallState.reconnecting : CallState.connecting,
-      'Reconnecting to server…',
+      'Reconnecting to server…$why',
     );
     _reconnectTimer = Timer(delay, _openWebSocket);
   }
@@ -171,20 +191,28 @@ class Signaling {
       // (noise suppression, auto gain, echo cancel, voice band-pass) are tuned
       // for a person talking into the phone and make ambient/room audio sound
       // thin and gated — bad for a monitor. Disabling them gives fuller audio.
-      _localStream = await navigator.mediaDevices.getUserMedia({
-        'audio': {
-          'echoCancellation': false,
-          'noiseSuppression': false,
-          'autoGainControl': false,
-          // Android (goog-prefixed) equivalents:
-          'googEchoCancellation': false,
-          'googNoiseSuppression': false,
-          'googAutoGainControl': false,
-          'googHighpassFilter': false,
-          'googTypingNoiseDetection': false,
-        },
-        'video': false,
-      });
+      try {
+        _localStream = await navigator.mediaDevices.getUserMedia({
+          'audio': {
+            'echoCancellation': false,
+            'noiseSuppression': false,
+            'autoGainControl': false,
+            // Android (goog-prefixed) equivalents:
+            'googEchoCancellation': false,
+            'googNoiseSuppression': false,
+            'googAutoGainControl': false,
+            'googHighpassFilter': false,
+            'googTypingNoiseDetection': false,
+          },
+          'video': false,
+        });
+      } catch (_) {
+        // Fall back to default constraints if a device rejects the custom map.
+        _localStream = await navigator.mediaDevices.getUserMedia({
+          'audio': true,
+          'video': false,
+        });
+      }
       await _pc!.addTrack(_localStream!.getAudioTracks().first, _localStream!);
     } else {
       // Listener only receives; mark the transceiver as recv-only.

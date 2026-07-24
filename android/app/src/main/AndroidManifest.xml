@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Lets the app prompt to be exempted from battery optimization so
+         aggressive OEMs (Realme/ColorOS, MIUI) don't kill the broadcast. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <!-- Optional: route audio to a paired Bluetooth headset. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
 

@@ -85,16 +85,24 @@ room code**. Listener should hear the broadcaster within a second or two.
 ## Keeping it running reliably (phone settings)
 
 The app runs in the background via a foreground service (persistent notification)
-and auto-reconnects to the server. But aggressive OEM battery managers —
-especially **MIUI / HyperOS (Xiaomi/Redmi/POCO)** — will still kill it unless you
-allow it. Do these on the **broadcasting** phone (the one you leave running):
+and auto-reconnects to the server. It also prompts to ignore battery optimization
+on first start. But aggressive OEM battery managers — **Realme / OPPO (ColorOS)**
+and **MIUI / HyperOS (Xiaomi/Redmi/POCO)** — will still kill it unless you allow
+it. Do these on the **broadcasting** phone (the one you leave running):
 
-1. **Autostart → ON**
-   Settings → Apps → Manage apps → *audio_intercom* → **Autostart**.
-2. **Battery → No restrictions**
-   Settings → Apps → Manage apps → *audio_intercom* → **Battery saver** → **No restrictions**.
+0. **Do NOT hide the app.** A hidden app (App Hider / hidden space) is treated as
+   inactive and killed within minutes, and can't be locked in Recents. Keep it
+   visible if you want it to keep broadcasting.
+1. **Auto-launch / Autostart → ON**
+   Realme/ColorOS: Settings → Apps → **Auto-launch** → enable *audio_intercom*.
+   MIUI: Settings → Apps → Manage apps → *audio_intercom* → **Autostart**.
+2. **Allow background activity / No battery restriction**
+   Realme: Settings → Battery → **App battery management** → *audio_intercom* →
+   **Allow background activity** + **Allow auto-launch** (and turn OFF
+   **"Sleep standby optimization"** in Battery settings — it kills apps when idle).
+   MIUI: Settings → Apps → *audio_intercom* → **Battery saver → No restrictions**.
 3. **Lock it in Recents** so "Clear all" won't kill it
-   Recents (□) → long-press the app card (or swipe down on it) → **Lock** 🔒.
+   Recents (□) → swipe down on / long-press the app card → **Lock** 🔒.
 4. **Exit with Home / Back / lock screen — never swipe it out of Recents.**
    Swiping from Recents kills the app (and the broadcast); backgrounding keeps it running.
 

@@ -82,6 +82,7 @@ class IntercomSession {
     final clientId = await _clientId(prefs);
 
     await _ensureNotificationPermission();
+    await _ensureBackgroundAllowed();
     await _startOrUpdateService();
 
     final signaling = Signaling(
@@ -129,6 +130,20 @@ class IntercomSession {
     final p = await FlutterForegroundTask.checkNotificationPermission();
     if (p != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();
+    }
+  }
+
+  /// Prompt (once) to exempt the app from battery optimization. Helps keep the
+  /// broadcast alive on aggressive OEMs. This covers standard Android battery
+  /// optimization only — Realme/MIUI "auto-launch" + "sleep optimization" are
+  /// separate settings the user must enable manually (see README).
+  Future<void> _ensureBackgroundAllowed() async {
+    try {
+      if (!await FlutterForegroundTask.isIgnoringBatteryOptimizations) {
+        await FlutterForegroundTask.requestIgnoreBatteryOptimization();
+      }
+    } catch (_) {
+      // Non-fatal — the manual OEM settings are the real safeguard.
     }
   }
 
